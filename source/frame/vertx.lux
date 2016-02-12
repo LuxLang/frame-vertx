@@ -1,0 +1,234 @@
+##  Copyright (c) Eduardo Julian. All rights reserved.
+##  This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+##  If a copy of the MPL was not distributed with this file,
+##  You can obtain one at http://mozilla.org/MPL/2.0/.
+
+(;import lux
+         (lux (control monad)
+              (codata io)
+              (data (list #refer #all #open ("" List/Functor List/Fold
+                                             "list:" List/Monoid))
+                    maybe
+                    number
+                    (text #as text #open ("text:" Text/Eq Text/Monoid)))
+              (host jvm
+                    io)
+              (concurrency async
+                           (frp #as frp)))
+         action
+         (.. (_ #as &)))
+
+## [Host]
+(jvm-import java.lang.Object
+  (toString [] [] String)
+  (equals [] [Object] boolean))
+
+(jvm-import io.vertx.core.Verticle)
+
+(jvm-import io.vertx.core.http.HttpMethod)
+
+(jvm-import (io.vertx.core.Handler a))
+
+(jvm-import io.vertx.core.buffer.Buffer
+  (#static buffer [] [(Array byte)] Buffer)
+  (getBytes [] [] (Array byte)))
+
+(jvm-import (java.util.Map$Entry k v)
+  (getKey [] [] k)
+  (getValue [] [] v))
+
+(jvm-import (java.util.Iterator e)
+  (hasNext [] [] boolean)
+  (next [] [] e))
+
+(jvm-import (java.lang.Iterable e)
+  (iterator [] [] (Iterator e)))
+
+(jvm-import #long (java.util.List e)
+  (size [] [] int)
+  (get [] [int] e))
+
+(jvm-import #long (java.util.Set e))
+
+(jvm-import io.vertx.core.MultiMap
+  (add [] [String String] MultiMap)
+  (entries [] [] (java.util.List (Map$Entry String String)))
+  (names [] [] (java.util.Set String)))
+
+(jvm-import io.vertx.core.net.SocketAddress
+  (port [] [] int)
+  (host [] [] String))
+
+(jvm-import javax.security.cert.X509Certificate)
+
+(jvm-import io.vertx.core.http.HttpVersion
+  (#enum HTTP_1_0 HTTP_1_1))
+
+(jvm-import (io.vertx.core.streams.ReadStream T)
+  (handler [] [(Handler T)] (ReadStream T))
+  (endHandler [] [(Handler Void)] (ReadStream T))
+  )
+
+(jvm-import io.vertx.core.http.HttpServerResponse
+  (headers [] [] MultiMap)
+  (setStatusCode [] [int] HttpServerResponse)
+  (write [] [Buffer] HttpServerResponse)
+  (end [] [] void))
+
+(jvm-import io.vertx.core.http.HttpServerRequest
+  (peerCertificateChain [] [] #try #? (Array X509Certificate))
+  (localAddress [] [] SocketAddress)
+  (remoteAddress [] [] SocketAddress)
+  (version [] [] HttpVersion)
+  (method [] [] HttpMethod)
+  (uri [] [] String)
+  (headers [] [] MultiMap)
+  (params [] [] MultiMap)
+  (formAttributes [] [] MultiMap)
+  (response [] [] HttpServerResponse)
+  (setExpectMultipart [] [boolean] HttpServerRequest)
+  )
+
+(jvm-import io.vertx.core.http.HttpServer
+  (listen [] [int] #io HttpServer)
+  (requestHandler [] [(Handler HttpServerRequest)] #io HttpServer))
+
+(jvm-import io.vertx.core.Vertx
+  (#static vertx [] [] #io Vertx)
+  (createHttpServer [] [] #io HttpServer)
+  (deployVerticle   [] [Verticle] #io void))
+
+(jvm-import io.vertx.core.AbstractVerticle)
+
+(jvm-import io.vertx.core.Future)
+
+## [Functions]
+(def (extract-param entries idx)
+  (-> (java.util.List (Map$Entry Text Text)) Int [Text Text])
+  (let [entry (java.util.List::get [(_jvm_l2i idx)] entries)]
+    [(Map$Entry::getKey [] entry) (Map$Entry::getValue [] entry)]))
+
+(do-template [<name> <method> <type>]
+  [(def (<name> req)
+     (-> HttpServerRequest <type>)
+     (let [kvs (|> req (<method> []))
+           entries (|> kvs (MultiMap::entries []))]
+       (map (extract-param entries)
+            (range 0 (dec (_jvm_i2l (java.util.List::size [] entries)))))))]
+
+  [get-headers      HttpServerRequest::headers        &;Headers]
+  [get-query-params HttpServerRequest::params         &;Params]
+  [get-form-params  HttpServerRequest::formAttributes &;Params]
+  )
+
+(def (get-params req)
+  (-> HttpServerRequest &;Params)
+  (list:++ (get-query-params req) (get-form-params req)))
+
+(def (write-body chan resp)
+  (-> &;Body HttpServerResponse (Async Unit))
+  (do Async/Monad
+    [?chunk chan]
+    (case ?chunk
+      (#;Some [packet chan'])
+      (exec (HttpServerResponse::write [(Buffer::buffer [packet])] resp)
+        (write-body chan' resp))
+
+      #;None
+      (wrap []))))
+
+(def (respond! response request)
+  (-> &;Response HttpServerRequest (Action Unit))
+  (do Async/Monad
+    [#let [(\slots [#&;response-status #&;response-headers #&;response-body]) response
+           $response (HttpServerRequest::response [] request)
+           _ (HttpServerResponse::setStatusCode [(_jvm_l2i response-status)] $response)
+           mm (foldL (: (-> MultiMap [Text Text] MultiMap)
+                        (lambda [headers pair] (MultiMap::add pair headers)))
+                     (HttpServerResponse::headers [] $response)
+                     response-headers)]
+     _ (write-body response-body $response)
+     #let [_ (HttpServerResponse::end [] $response)]]
+    (:: Action/Monad (wrap []))))
+
+(def (iterator->list iter)
+  (All [a] (-> (Iterator a) (List a)))
+  (if (Iterator::hasNext [] iter)
+    (#;Cons (Iterator::next [] iter)
+            (iterator->list iter))
+    #;Nil))
+
+(def (parse-SocketAddress addr)
+  (-> SocketAddress &;Server-Data)
+  {#&;server-port  (i2l (SocketAddress::port [] addr))
+   #&;server-host  (SocketAddress::host [] addr)})
+
+(def (request$ req body)
+  (-> HttpServerRequest &;Body &;Request)
+  (let [local-addr (parse-SocketAddress (HttpServerRequest::localAddress [] req))
+        remote-addr (parse-SocketAddress (HttpServerRequest::remoteAddress [] req))]
+    {#&;request-meta {#&;local-address local-addr
+                      #&;remote-address remote-addr
+                      #&;http-version (let [version (HttpServerRequest::version [] req)]
+                                        (if (Object::equals [HttpVersion::HTTP_1_0] version)
+                                          "1.0"
+                                          "1.1"))}
+     #&;request-scheme (case (HttpServerRequest::peerCertificateChain [] req)
+                         (#;Right (#;Some _)) #&;HTTPS
+                         _                    #&;HTTP)
+     #&;request-uri    (let [raw-uri (HttpServerRequest::uri [] req)]
+                         (? raw-uri
+                            (do Maybe/Monad
+                              [[uri params] (text;split-with "?" raw-uri)]
+                              (wrap uri))))
+     #&;request-method (|> req (HttpServerRequest::method []) (Object::toString []) &;Method$ (? #&;OPTIONS))
+     #&;request-headers (get-headers req)
+     #&;request-params (get-params req)
+     #&;request-body   body}))
+
+(def (http-handler server)
+  (-> &;Handler (Handler HttpServerRequest))
+  (let [body (: &;Body (frp;chan))]
+    (object [(Handler HttpServerRequest)]
+      []
+      (#override (Handler A) handle [] [(vreq A)] void
+                 (exec (do-to vreq
+                         (HttpServerRequest::setExpectMultipart [true])
+                         (ReadStream::handler
+                          [(object [(Handler Buffer)]
+                             []
+                             (#override (Handler A) handle [] [(buffer A)] void
+                                        (exec (frp;write (Buffer::getBytes [] buffer) body)
+                                          []))
+                             )])
+                         (ReadStream::endHandler
+                          [[(object [(Handler Void)]
+                              []
+                              (#override (Handler A) handle [] [(_ A)] void
+                                         (exec (do Action/Monad
+                                                 [response (server (request$ vreq body))]
+                                                 (respond! response vreq))
+                                           []))
+                              )]]))
+                   [])))))
+
+(def (verticle$ port server-fun vertx)
+  (-> &;Port &;Handler Vertx Verticle)
+  (object AbstractVerticle []
+    []
+    (#override AbstractVerticle start [] [(start Future)] void
+               (exec (run-io (do IO/Monad
+                               [http-server (Vertx::createHttpServer [] vertx)
+                                _ (HttpServer::requestHandler [(http-handler server-fun)] http-server)]
+                               (HttpServer::listen [(_jvm_l2i port)] http-server)))
+                 []))
+
+    (#override AbstractVerticle stop [] [(stop Future)] void #throws [Exception]
+               (run-io (print-line "Verticle stopped!")))))
+
+(def #export (deploy port handler)
+  (-> &;Port &;Handler (IO Unit))
+  (do IO/Monad
+    [vertx (Vertx::vertx [])]
+    (Vertx::deployVerticle [(verticle$ port handler vertx)]
+                           vertx)))
