@@ -6,17 +6,16 @@
 (;import lux
          (lux (control monad)
               (codata io)
-              (data (list #refer #all #open ("" List/Functor List/Fold
-                                             "list:" List/Monoid))
+              (data [list #* "" List/Functor List/Fold "List:" List/Monoid]
                     maybe
-                    number
-                    (text #as text #open ("text:" Text/Eq Text/Monoid)))
-              (host jvm
-                    io)
+                    [number #* "i:" Int/Show]
+                    [text "Text:" Text/Eq Text/Monoid])
+              host
               (concurrency async
-                           (frp #as frp)))
+                           [frp])
+              hack)
          action
-         (.. (_ #as &)))
+         ["&" frame])
 
 ## [Host]
 (jvm-import java.lang.Object
@@ -123,7 +122,7 @@
 
 (def (get-params req)
   (-> HttpServerRequest &;Params)
-  (list:++ (get-query-params req) (get-form-params req)))
+  (List:++ (get-query-params req) (get-form-params req)))
 
 (def (write-body chan resp)
   (-> &;Body HttpServerResponse (Async Unit))
@@ -138,7 +137,7 @@
       (wrap []))))
 
 (def (respond! response request)
-  (-> &;Response HttpServerRequest (Action Unit))
+  (-> &;Response HttpServerRequest (Async Unit))
   (do Async/Monad
     [#let [(\slots [#&;response-status #&;response-headers #&;response-body]) response
            $response (HttpServerRequest::response [] request)
@@ -149,7 +148,7 @@
                      response-headers)]
      _ (write-body response-body $response)
      #let [_ (HttpServerResponse::end [] $response)]]
-    (:: Action/Monad (wrap []))))
+    (wrap [])))
 
 (def (iterator->list iter)
   (All [a] (-> (Iterator a) (List a)))
@@ -159,20 +158,20 @@
     #;Nil))
 
 (def (parse-SocketAddress addr)
-  (-> SocketAddress &;Server-Data)
-  {#&;server-port  (i2l (SocketAddress::port [] addr))
-   #&;server-host  (SocketAddress::host [] addr)})
+  (-> SocketAddress &;Address)
+  {#&;address-port  (i2l (SocketAddress::port [] addr))
+   #&;address-host  (SocketAddress::host [] addr)})
 
 (def (request$ req body)
   (-> HttpServerRequest &;Body &;Request)
   (let [local-addr (parse-SocketAddress (HttpServerRequest::localAddress [] req))
         remote-addr (parse-SocketAddress (HttpServerRequest::remoteAddress [] req))]
-    {#&;request-meta {#&;local-address local-addr
-                      #&;remote-address remote-addr
-                      #&;http-version (let [version (HttpServerRequest::version [] req)]
-                                        (if (Object::equals [HttpVersion::HTTP_1_0] version)
-                                          "1.0"
-                                          "1.1"))}
+    {#&;local-address local-addr
+     #&;remote-address remote-addr
+     #&;http-version (let [version (HttpServerRequest::version [] req)]
+                       (if (Object::equals [HttpVersion::HTTP_1_0] version)
+                         "1.0"
+                         "1.1"))
      #&;request-scheme (case (HttpServerRequest::peerCertificateChain [] req)
                          (#;Right (#;Some _)) #&;HTTPS
                          _                    #&;HTTP)
@@ -181,32 +180,37 @@
                             (do Maybe/Monad
                               [[uri params] (text;split-with "?" raw-uri)]
                               (wrap uri))))
-     #&;request-method (|> req (HttpServerRequest::method []) (Object::toString []) &;Method$ (? #&;OPTIONS))
+     #&;request-method (|> req (HttpServerRequest::method []) (Object::toString []))
      #&;request-headers (get-headers req)
      #&;request-params (get-params req)
      #&;request-body   body}))
 
-(def (http-handler server)
+(jvm-import java.lang.String
+  (new [] [(Array byte)]))
+
+(def (http-handler handler)
   (-> &;Handler (Handler HttpServerRequest))
-  (let [body (: &;Body (frp;chan))]
-    (object [(Handler HttpServerRequest)]
-      []
-      (#override (Handler A) handle [] [(vreq A)] void
+  (object [(Handler HttpServerRequest)]
+    []
+    (#override (Handler A) handle [] [(vreq A)] void
+               (let [body (: &;Body (frp;chan))]
                  (exec (do-to vreq
                          (HttpServerRequest::setExpectMultipart [true])
                          (ReadStream::handler
                           [(object [(Handler Buffer)]
                              []
                              (#override (Handler A) handle [] [(buffer A)] void
-                                        (exec (frp;write (Buffer::getBytes [] buffer) body)
-                                          []))
+                                        (run-io (do IO/Monad
+                                                  [_ (frp;write (Buffer::getBytes [] buffer) body)]
+                                                  (wrap []))))
                              )])
                          (ReadStream::endHandler
                           [[(object [(Handler Void)]
                               []
                               (#override (Handler A) handle [] [(_ A)] void
-                                         (exec (do Action/Monad
-                                                 [response (server (request$ vreq body))]
+                                         (exec (do Async/Monad
+                                                 [#let [_ (run-io (frp;close body))]
+                                                  response (handler (request$ vreq body))]
                                                  (respond! response vreq))
                                            []))
                               )]]))
@@ -224,7 +228,7 @@
                  []))
 
     (#override AbstractVerticle stop [] [(stop Future)] void #throws [Exception]
-               (run-io (print-line "Verticle stopped!")))))
+               (log! "Verticle stopped!"))))
 
 (def #export (deploy port handler)
   (-> &;Port &;Handler (IO Unit))
