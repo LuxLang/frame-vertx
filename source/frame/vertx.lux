@@ -6,10 +6,9 @@
 (;import lux
          (lux (control monad)
               (codata io)
-              (data [list #* "" List/Functor List/Fold "List:" List/Monoid]
+              (data [list #* "" List/Functor List/Fold "List/" List/Monoid]
                     maybe
-                    [number #* "i:" Int/Show]
-                    [text "Text:" Text/Eq Text/Monoid])
+                    [text])
               host
               (concurrency async
                            [frp])
@@ -104,7 +103,7 @@
 ## [Functions]
 (def (extract-param entries idx)
   (-> (java.util.List (Map$Entry Text Text)) Int [Text Text])
-  (let [entry (java.util.List::get [(_jvm_l2i idx)] entries)]
+  (let [entry (java.util.List::get [(_lux_proc ["jvm" "l2i"] [idx])] entries)]
     [(Map$Entry::getKey [] entry) (Map$Entry::getValue [] entry)]))
 
 (do-template [<name> <method> <type>]
@@ -113,7 +112,7 @@
      (let [kvs (|> req (<method> []))
            entries (|> kvs (MultiMap::entries []))]
        (map (extract-param entries)
-            (range 0 (dec (_jvm_i2l (java.util.List::size [] entries)))))))]
+            (range 0 (dec (_lux_proc ["jvm" "i2l"] [(java.util.List::size [] entries)]))))))]
 
   [get-headers      HttpServerRequest::headers        &;Headers]
   [get-query-params HttpServerRequest::params         &;Params]
@@ -122,7 +121,7 @@
 
 (def (get-params req)
   (-> HttpServerRequest &;Params)
-  (List:++ (get-query-params req) (get-form-params req)))
+  (List/++ (get-query-params req) (get-form-params req)))
 
 (def (write-body chan resp)
   (-> &;Body HttpServerResponse (Async Unit))
@@ -141,7 +140,7 @@
   (do Async/Monad
     [#let [(\slots [#&;response-status #&;response-headers #&;response-body]) response
            $response (HttpServerRequest::response [] request)
-           _ (HttpServerResponse::setStatusCode [(_jvm_l2i response-status)] $response)
+           _ (HttpServerResponse::setStatusCode [(_lux_proc ["jvm" "l2i"] [response-status])] $response)
            mm (foldL (: (-> MultiMap [Text Text] MultiMap)
                         (lambda [headers pair] (MultiMap::add pair headers)))
                      (HttpServerResponse::headers [] $response)
@@ -192,43 +191,43 @@
   (-> &;Handler (Handler HttpServerRequest))
   (object [(Handler HttpServerRequest)]
     []
-    (#override (Handler A) handle [] [(vreq A)] void
-               (let [body (: &;Body (frp;chan))]
-                 (exec (do-to vreq
-                         (HttpServerRequest::setExpectMultipart [true])
-                         (ReadStream::handler
-                          [(object [(Handler Buffer)]
-                             []
-                             (#override (Handler A) handle [] [(buffer A)] void
-                                        (run-io (do IO/Monad
-                                                  [_ (frp;write (Buffer::getBytes [] buffer) body)]
-                                                  (wrap []))))
-                             )])
-                         (ReadStream::endHandler
-                          [[(object [(Handler Void)]
-                              []
-                              (#override (Handler A) handle [] [(_ A)] void
-                                         (exec (do Async/Monad
-                                                 [#let [_ (run-io (frp;close body))]
-                                                  response (handler (request$ vreq body))]
-                                                 (respond! response vreq))
-                                           []))
-                              )]]))
-                   [])))))
+    ((Handler A) handle [] [(vreq A)] void
+     (let [body (: &;Body (frp;chan))]
+       (exec (do-to vreq
+               (HttpServerRequest::setExpectMultipart [true])
+               (ReadStream::handler
+                [(object [(Handler Buffer)]
+                   []
+                   ((Handler A) handle [] [(buffer A)] void
+                    (run-io (do IO/Monad
+                              [_ (frp;write (Buffer::getBytes [] buffer) body)]
+                              (wrap []))))
+                   )])
+               (ReadStream::endHandler
+                [[(object [(Handler Void)]
+                    []
+                    ((Handler A) handle [] [(_ A)] void
+                     (exec (do Async/Monad
+                             [#let [_ (run-io (frp;close body))]
+                              response (handler (request$ vreq body))]
+                             (respond! response vreq))
+                       []))
+                    )]]))
+         [])))))
 
 (def (verticle$ port server-fun vertx)
   (-> &;Port &;Handler Vertx Verticle)
   (object AbstractVerticle []
     []
-    (#override AbstractVerticle start [] [(start Future)] void
-               (exec (run-io (do IO/Monad
-                               [http-server (Vertx::createHttpServer [] vertx)
-                                _ (HttpServer::requestHandler [(http-handler server-fun)] http-server)]
-                               (HttpServer::listen [(_jvm_l2i port)] http-server)))
-                 []))
+    (AbstractVerticle start [] [(start Future)] void
+                      (exec (run-io (do IO/Monad
+                                      [http-server (Vertx::createHttpServer [] vertx)
+                                       _ (HttpServer::requestHandler [(http-handler server-fun)] http-server)]
+                                      (HttpServer::listen [(_lux_proc ["jvm" "l2i"] [port])] http-server)))
+                        []))
 
-    (#override AbstractVerticle stop [] [(stop Future)] void #throws [Exception]
-               (log! "Verticle stopped!"))))
+    (AbstractVerticle stop [] [(stop Future)] void #throws [Exception]
+                      (log! "Verticle stopped!"))))
 
 (def #export (deploy port handler)
   (-> &;Port &;Handler (IO Unit))
