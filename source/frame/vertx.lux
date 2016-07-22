@@ -101,13 +101,13 @@
 (jvm-import io.vertx.core.Future)
 
 ## [Functions]
-(def (extract-param entries idx)
+(def: (extract-param entries idx)
   (-> (java.util.List (Map$Entry Text Text)) Int [Text Text])
   (let [entry (java.util.List::get [(_lux_proc ["jvm" "l2i"] [idx])] entries)]
     [(Map$Entry::getKey [] entry) (Map$Entry::getValue [] entry)]))
 
 (do-template [<name> <method> <type>]
-  [(def (<name> req)
+  [(def: (<name> req)
      (-> HttpServerRequest <type>)
      (let [kvs (|> req (<method> []))
            entries (|> kvs (MultiMap::entries []))]
@@ -119,11 +119,11 @@
   [get-form-params  HttpServerRequest::formAttributes &;Params]
   )
 
-(def (get-params req)
+(def: (get-params req)
   (-> HttpServerRequest &;Params)
   (List/++ (get-query-params req) (get-form-params req)))
 
-(def (write-body chan resp)
+(def: (write-body chan resp)
   (-> &;Body HttpServerResponse (Async Unit))
   (do Async/Monad
     [?chunk chan]
@@ -135,33 +135,33 @@
       #;None
       (wrap []))))
 
-(def (respond! response request)
+(def: (respond! response request)
   (-> &;Response HttpServerRequest (Async Unit))
   (do Async/Monad
     [#let [(\slots [#&;response-status #&;response-headers #&;response-body]) response
            $response (HttpServerRequest::response [] request)
            _ (HttpServerResponse::setStatusCode [(_lux_proc ["jvm" "l2i"] [response-status])] $response)
-           mm (foldL (: (-> MultiMap [Text Text] MultiMap)
-                        (lambda [headers pair] (MultiMap::add pair headers)))
-                     (HttpServerResponse::headers [] $response)
-                     response-headers)]
+           mm (fold (: (-> MultiMap [Text Text] MultiMap)
+                       (lambda [headers pair] (MultiMap::add pair headers)))
+                    (HttpServerResponse::headers [] $response)
+                    response-headers)]
      _ (write-body response-body $response)
      #let [_ (HttpServerResponse::end [] $response)]]
     (wrap [])))
 
-(def (iterator->list iter)
+(def: (iterator->list iter)
   (All [a] (-> (Iterator a) (List a)))
   (if (Iterator::hasNext [] iter)
     (#;Cons (Iterator::next [] iter)
             (iterator->list iter))
     #;Nil))
 
-(def (parse-SocketAddress addr)
+(def: (parse-SocketAddress addr)
   (-> SocketAddress &;Address)
   {#&;address-port  (i2l (SocketAddress::port [] addr))
    #&;address-host  (SocketAddress::host [] addr)})
 
-(def (request$ req body)
+(def: (request$ req body)
   (-> HttpServerRequest &;Body &;Request)
   (let [local-addr (parse-SocketAddress (HttpServerRequest::localAddress [] req))
         remote-addr (parse-SocketAddress (HttpServerRequest::remoteAddress [] req))]
@@ -187,7 +187,7 @@
 (jvm-import java.lang.String
   (new [] [(Array byte)]))
 
-(def (http-handler handler)
+(def: (http-handler handler)
   (-> &;Handler (Handler HttpServerRequest))
   (object [(Handler HttpServerRequest)]
     []
@@ -215,7 +215,7 @@
                     )]]))
          [])))))
 
-(def (verticle$ port server-fun vertx)
+(def: (verticle$ port server-fun vertx)
   (-> &;Port &;Handler Vertx Verticle)
   (object AbstractVerticle []
     []
@@ -229,7 +229,7 @@
     (AbstractVerticle stop [] [(stop Future)] void #throws [Exception]
                       (log! "Verticle stopped!"))))
 
-(def #export (deploy port handler)
+(def: #export (deploy port handler)
   (-> &;Port &;Handler (IO Unit))
   (do IO/Monad
     [vertx (Vertx::vertx [])]
