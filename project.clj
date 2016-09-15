@@ -3,8 +3,8 @@
   :url "https://github.com/LuxLang/frame-vertx"
   :license {:name "Mozilla Public License (Version 2.0)"
             :url "https://www.mozilla.org/en-US/MPL/2.0/"}
-  :plugins [[com.github.luxlang/lein-luxc "0.3.0-SNAPSHOT"]]
-  :dependencies [[com.github.luxlang/lux-stdlib "0.4.0-SNAPSHOT"]
+  :plugins [[com.github.luxlang/lein-luxc "0.3.0"]]
+  :dependencies [[com.github.luxlang/lux-stdlib "0.4.0"]
                  [com.github.luxlang/frame "0.1.0-SNAPSHOT"]
                  [io.vertx/vertx-web "3.2.0"]]
   :source-paths ["source"]
